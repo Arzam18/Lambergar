@@ -29,7 +29,6 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             curl \
             xz-utils \
@@ -38,17 +37,16 @@ jobs:
             binutils
 
       # ============================================================
-      # INSTALL ZIG
+      # ZIG 0.15.1
       # ============================================================
       - name: Install Zig 0.15.1
         run: |
           ZIG_VERSION="0.15.1"
-          ZIG_ARCHIVE="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
-          ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_ARCHIVE}"
+          ARCHIVE="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          URL="https://ziglang.org/download/${ZIG_VERSION}/${ARCHIVE}"
 
-          curl -L "$ZIG_URL" -o "$ZIG_ARCHIVE"
-
-          tar -xf "$ZIG_ARCHIVE"
+          curl -L "$URL" -o "$ARCHIVE"
+          tar -xf "$ARCHIVE"
 
           ZIG_DIR="$PWD/zig-x86_64-linux-${ZIG_VERSION}"
 
@@ -67,24 +65,13 @@ jobs:
 
       # ============================================================
       # REPAIR BROKEN ZIG STRING LITERALS
-      #
-      # Some generated NNUE debug strings contain actual newline
-      # characters inside normal Zig string literals.
       # ============================================================
       - name: Repair broken Zig string literals
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          root = Path("src")
-          files = list(root.rglob("*.zig"))
-
-          if not files:
-              raise SystemExit("ERROR: No Zig source files found.")
-
-          total = 0
-
-          for path in files:
+          for path in Path("src").rglob("*.zig"):
               text = path.read_text()
 
               result = []
@@ -96,16 +83,6 @@ jobs:
 
               while i < len(text):
                   ch = text[i]
-
-                  # Preserve Zig multiline strings.
-                  if not in_string and text.startswith('\\\\(', i):
-                      j = text.find('\\\\)', i + 3)
-
-                      if j != -1:
-                          block = text[i:j + 3]
-                          result.append(block)
-                          i = j + 3
-                          continue
 
                   if ch == '"' and not escaped:
                       in_string = not in_string
@@ -133,21 +110,19 @@ jobs:
 
               if changed:
                   path.write_text(fixed)
-                  total += 1
                   print(f"REPAIRED: {path}")
 
-          print()
-          print(f"Files repaired: {total}")
+          print("String repair complete.")
           PY
 
       # ============================================================
       # FIX NEON VECTOR LANE EXTRACTION
       #
-      # Zig vectors cannot be sliced using:
+      # Zig @Vector cannot be sliced with:
       #
       #     vector[0..8].*
       #
-      # Use @shuffle() to extract the lanes instead.
+      # Replace those operations with @shuffle().
       # ============================================================
       - name: Fix NEON vector lane extraction
         run: |
@@ -157,132 +132,106 @@ jobs:
           path = Path("src/nnue.zig")
           text = path.read_text()
 
-          replacements = {
-              'const p0_lo: VecI32 = @intCast(p0[0..8].*);':
-              '''const p0_lo: VecI32 = @intCast(@shuffle(
-                  i16,
-                  p0,
-                  p0,
-                  [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
-              ));''',
+          replacements = [
+              (
+                  "const p0_lo: VecI32 = @intCast(p0[0..8].*);",
+                  """const p0_lo: VecI32 = @intCast(@shuffle(
+              i16,
+              p0,
+              p0,
+              [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
+          ));"""
+              ),
 
-              'const p0_hi: VecI32 = @intCast(p0[8..16].*);':
-              '''const p0_hi: VecI32 = @intCast(@shuffle(
-                  i16,
-                  p0,
-                  p0,
-                  [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
-              ));''',
+              (
+                  "const p0_hi: VecI32 = @intCast(p0[8..16].*);",
+                  """const p0_hi: VecI32 = @intCast(@shuffle(
+              i16,
+              p0,
+              p0,
+              [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
+          ));"""
+              ),
 
-              'const p1_lo: VecI32 = @intCast(p1[0..8].*);':
-              '''const p1_lo: VecI32 = @intCast(@shuffle(
-                  i16,
-                  p1,
-                  p1,
-                  [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
-              ));''',
+              (
+                  "const p1_lo: VecI32 = @intCast(p1[0..8].*);",
+                  """const p1_lo: VecI32 = @intCast(@shuffle(
+              i16,
+              p1,
+              p1,
+              [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
+          ));"""
+              ),
 
-              'const p1_hi: VecI32 = @intCast(p1[8..16].*);':
-              '''const p1_hi: VecI32 = @intCast(@shuffle(
-                  i16,
-                  p1,
-                  p1,
-                  [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
-              ));''',
+              (
+                  "const p1_hi: VecI32 = @intCast(p1[8..16].*);",
+                  """const p1_hi: VecI32 = @intCast(@shuffle(
+              i16,
+              p1,
+              p1,
+              [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
+          ));"""
+              ),
 
-              'const product_lo: VecI32 = @intCast(product[0..8].*);':
-              '''const product_lo: VecI32 = @intCast(@shuffle(
-                  i16,
-                  product,
-                  product,
-                  [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
-              ));''',
+              (
+                  "const product_lo: VecI32 = @intCast(product[0..8].*);",
+                  """const product_lo: VecI32 = @intCast(@shuffle(
+              i16,
+              product,
+              product,
+              [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
+          ));"""
+              ),
 
-              'const product_hi: VecI32 = @intCast(product[8..16].*);':
-              '''const product_hi: VecI32 = @intCast(@shuffle(
-                  i16,
-                  product,
-                  product,
-                  [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
-              ));',
-          }
+              (
+                  "const product_hi: VecI32 = @intCast(product[8..16].*);",
+                  """const product_hi: VecI32 = @intCast(@shuffle(
+              i16,
+              product,
+              product,
+              [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
+          ));"""
+              ),
+          ]
 
-          fixed_count = 0
+          fixed = 0
 
-          for old, new in replacements.items():
+          for old, new in replacements:
               if old in text:
                   text = text.replace(old, new)
-                  fixed_count += 1
-                  print(f"FIXED: {old}")
+                  fixed += 1
+                  print("FIXED:", old)
               else:
-                  print(f"NOT FOUND: {old}")
+                  print("NOT FOUND:", old)
 
           path.write_text(text)
 
           print()
-          print(f"Vector expressions fixed: {fixed_count}/6")
+          print(f"Fixed {fixed}/6 vector expressions.")
+
+          if fixed != 6:
+              raise SystemExit("ERROR: Expected to fix all 6 vector expressions.")
           PY
 
       # ============================================================
-      # VERIFY NO VECTOR SLICES REMAIN
+      # VERIFY VECTOR FIX
       # ============================================================
-      - name: Verify NEON vector fixes
+      - name: Verify vector fix
         run: |
-          echo "===== CHECKING FOR INVALID VECTOR SLICES ====="
+          echo "===== CHECKING VECTOR SLICES ====="
 
           if grep -nE \
             '@intCast\((p0|p1|product)\[[0-9]+\.\.[0-9]+\]\.\*\)' \
             src/nnue.zig; then
 
-            echo
             echo "ERROR: Invalid vector slicing remains."
             exit 1
           fi
 
-          echo "OK: No invalid vector slices found."
+          echo "OK: No invalid vector slices remain."
 
       # ============================================================
-      # CHECK FOR BROKEN MULTILINE STRINGS
-      # ============================================================
-      - name: Check for remaining broken strings
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          errors = []
-
-          for path in Path("src").rglob("*.zig"):
-              text = path.read_text()
-
-              in_string = False
-              escaped = False
-
-              for line_no, line in enumerate(text.splitlines(True), 1):
-                  for ch in line:
-                      if ch == '"' and not escaped:
-                          in_string = not in_string
-
-                      if ch == '\\' and not escaped:
-                          escaped = True
-                      else:
-                          escaped = False
-
-                  if in_string:
-                      errors.append((path, line_no))
-
-          if errors:
-              print("ERROR: Possible broken multiline string literals remain:")
-
-              for path, line in errors:
-                  print(f"  {path}:{line}")
-
-              raise SystemExit(1)
-
-          print("OK: No broken multiline Zig string literals detected.")
-          PY
-
-      # ============================================================
-      # FORMAT ZIG
+      # FORMAT
       # ============================================================
       - name: Format Zig source
         run: |
@@ -293,28 +242,22 @@ jobs:
           zig fmt --check src
 
       # ============================================================
-      # LOCATE ANDROID SDK
+      # ANDROID SDK
       # ============================================================
       - name: Locate Android SDK
         run: |
-          echo "===== ANDROID ENVIRONMENT ====="
-
           SDK=""
 
           if [ -n "${ANDROID_SDK_ROOT:-}" ] && \
              [ -d "$ANDROID_SDK_ROOT" ]; then
-
             SDK="$ANDROID_SDK_ROOT"
 
           elif [ -n "${ANDROID_HOME:-}" ] && \
                [ -d "$ANDROID_HOME" ]; then
-
             SDK="$ANDROID_HOME"
 
           elif [ -d "/usr/local/lib/android/sdk" ]; then
-
             SDK="/usr/local/lib/android/sdk"
-
           fi
 
           if [ -z "$SDK" ]; then
@@ -322,16 +265,16 @@ jobs:
             exit 1
           fi
 
-          echo "Using Android SDK:"
-          echo "$SDK"
-
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
 
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
 
+          echo "Using Android SDK:"
+          echo "$SDK"
+
       # ============================================================
-      # LOCATE SDKMANAGER
+      # SDKMANAGER
       # ============================================================
       - name: Locate sdkmanager
         run: |
@@ -341,9 +284,7 @@ jobs:
 
           if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
             SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          fi
-
-          if [ -z "$SDKMANAGER" ]; then
+          else
             SDKMANAGER="$(find "$SDK/cmdline-tools" \
               -type f \
               -name sdkmanager \
@@ -361,8 +302,6 @@ jobs:
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
           echo "===== SDKMANAGER ====="
-          echo "$SDKMANAGER"
-
           "$SDKMANAGER" --version
 
       # ============================================================
@@ -373,7 +312,7 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
       # ============================================================
-      # INSTALL ANDROID NDK
+      # INSTALL NDK
       # ============================================================
       - name: Install Android NDK
         run: |
@@ -390,26 +329,19 @@ jobs:
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
 
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          SYSROOT="$TOOLCHAIN/sysroot"
+          CLANG="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
+
           if [ ! -d "$NDK" ]; then
-            echo "ERROR: Android NDK not found:"
+            echo "ERROR: NDK not found:"
             echo "$NDK"
             exit 1
           fi
 
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          SYSROOT="$TOOLCHAIN/sysroot"
-
-          CLANG="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
-
           if [ ! -x "$CLANG" ]; then
-            echo "ERROR: AArch64 Android compiler not found:"
+            echo "ERROR: Android ARM64 compiler not found:"
             echo "$CLANG"
-            exit 1
-          fi
-
-          if [ ! -d "$SYSROOT" ]; then
-            echo "ERROR: Android sysroot not found:"
-            echo "$SYSROOT"
             exit 1
           fi
 
@@ -421,19 +353,11 @@ jobs:
           echo "$NDK"
 
           echo
-          echo "===== TOOLCHAIN ====="
-          echo "$TOOLCHAIN"
-
-          echo
-          echo "===== SYSROOT ====="
-          echo "$SYSROOT"
-
-          echo
-          echo "===== AARCH64 CLANG ====="
+          echo "===== CLANG ====="
           "$CLANG" --version
 
       # ============================================================
-      # CREATE ZIG ANDROID LIBC CONFIG
+      # ANDROID LIBC CONFIGURATION FOR ZIG
       # ============================================================
       - name: Create Android libc configuration
         run: |
@@ -443,13 +367,13 @@ jobs:
           ARCH_INCLUDE="$SYSROOT/usr/include/aarch64-linux-android"
 
           if [ ! -d "$CRT_DIR" ]; then
-            echo "ERROR: Android CRT directory not found:"
+            echo "ERROR: CRT directory missing:"
             echo "$CRT_DIR"
             exit 1
           fi
 
           if [ ! -d "$ARCH_INCLUDE" ]; then
-            echo "ERROR: Android architecture include directory not found:"
+            echo "ERROR: Android architecture include directory missing:"
             echo "$ARCH_INCLUDE"
             exit 1
           fi
@@ -467,7 +391,7 @@ jobs:
           cat android-libc.conf
 
       # ============================================================
-      # VERIFY ANDROID LIBC
+      # VERIFY LIBC
       # ============================================================
       - name: Verify Android libc
         run: |
@@ -478,68 +402,42 @@ jobs:
           ls -ld "$SYSROOT"
 
           echo
-          echo "===== INCLUDE ====="
-          ls -ld "$SYSROOT/usr/include"
+          echo "===== ARCH INCLUDE ====="
           ls -ld "$SYSROOT/usr/include/aarch64-linux-android"
 
           echo
-          echo "===== CRT DIRECTORY ====="
+          echo "===== CRT ====="
           ls -lh "$CRT_DIR" | head -30
 
-          echo
-          echo "===== LIBC ====="
-
-          if [ -f "$CRT_DIR/libc.so" ]; then
-            echo "OK: libc.so"
-          elif [ -f "$CRT_DIR/libc.a" ]; then
-            echo "OK: libc.a"
-          else
+          if [ ! -e "$CRT_DIR/libc.so" ] && \
+             [ ! -e "$CRT_DIR/libc.a" ]; then
             echo "ERROR: Android libc not found."
             exit 1
           fi
 
-      # ============================================================
-      # INSPECT BUILD
-      # ============================================================
-      - name: Inspect Lambergar build
-        run: |
-          echo "===== ZIG BUILD HELP ====="
-          zig build -h || true
-
-          echo
-          echo "===== BUILD.ZIG ====="
-          sed -n '1,280p' build.zig
+          echo "OK: Android libc found."
 
       # ============================================================
-      # BUILD LAMBERGAR
+      # BUILD
       # ============================================================
       - name: Build Lambergar Android ARM64
         run: |
-          echo "===== ZIG VERSION ====="
+          echo "===== ZIG ====="
           zig version
 
           echo
-          echo "===== BUILD TARGET ====="
-          zig targets | grep -A5 -B5 android || true
-
-          echo
-          echo "===== BUILD LAMBERGAR ====="
+          echo "===== BUILD ====="
 
           zig build \
             -Dtarget=aarch64-linux-android.24 \
             --libc android-libc.conf
 
       # ============================================================
-      # LOCATE BUILD OUTPUT
+      # SHOW OUTPUT
       # ============================================================
-      - name: Locate binary
+      - name: Show build output
         run: |
-          echo "===== BUILD OUTPUT ====="
-
-          if [ ! -d zig-out ]; then
-            echo "ERROR: zig-out directory does not exist."
-            exit 1
-          fi
+          echo "===== ZIG-OUT ====="
 
           find zig-out \
             -type f \
@@ -548,7 +446,7 @@ jobs:
       # ============================================================
       # VERIFY ARM64
       # ============================================================
-      - name: Verify Android ARM64 binary
+      - name: Verify ARM64 executable
         run: |
           BIN="$(find zig-out/bin \
             -type f \
@@ -561,7 +459,7 @@ jobs:
             exit 1
           fi
 
-          echo "===== BINARY ====="
+          echo "Binary:"
           echo "$BIN"
 
           echo
@@ -569,25 +467,22 @@ jobs:
           file "$BIN"
 
           echo
-          echo "===== ELF HEADER ====="
-
+          echo "===== ELF ====="
           readelf -h "$BIN" | grep -E \
             "Class:|Data:|Type:|OS/ABI:|Machine:"
 
-          echo
-          echo "===== ARCHITECTURE CHECK ====="
-
-          if file "$BIN" | grep -qi "ARM aarch64"; then
-            echo "OK: AArch64 ARM64 binary."
-          else
+          if ! file "$BIN" | grep -qi "ARM aarch64"; then
             echo "ERROR: Binary is not AArch64."
             exit 1
           fi
 
+          echo
+          echo "OK: Android ARM64 binary."
+
       # ============================================================
       # PREPARE ARTIFACT
       # ============================================================
-      - name: Prepare artifact
+      - name: Prepare release artifact
         run: |
           mkdir -p release
 
@@ -598,18 +493,16 @@ jobs:
             | head -n 1)"
 
           if [ -z "$BIN" ]; then
-            echo "ERROR: Could not locate Lambergar executable."
+            echo "ERROR: Binary not found."
             exit 1
           fi
 
           cp "$BIN" release/lambergar-android-arm64
-
           chmod +x release/lambergar-android-arm64
 
-          echo "===== FINAL ARTIFACT ====="
+          echo "===== FINAL FILE ====="
           ls -lh release/lambergar-android-arm64
 
-          echo
           file release/lambergar-android-arm64
 
       # ============================================================
