@@ -24,7 +24,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             curl \
-            unzip \
             xz-utils \
             python3 \
             file \
@@ -47,96 +46,166 @@ jobs:
 
       - name: Show source tree
         run: |
-          echo "===== SOURCE FILES ====="
-          find src -maxdepth 1 -type f -name "*.zig" | sort
+          echo "===== ZIG SOURCE FILES ====="
+          find src -type f -name "*.zig" -print | sort
 
-      - name: Repair NNUE debug strings
+      # ============================================================
+      # REPAIR BROKEN MULTILINE ZIG STRING LITERALS
+      # ============================================================
+      - name: Repair broken Zig string literals
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("src/nnue.zig")
-          text = path.read_text()
+          root = Path("src")
 
-          start = text.find("pub fn print_debug_stats")
+          files = list(root.rglob("*.zig"))
 
-          if start == -1:
-              print("print_debug_stats() not found; no repair needed.")
-              raise SystemExit(0)
+          if not files:
+              raise SystemExit("ERROR: No Zig source files found.")
 
-          # Locate the end of the function.
-          brace_start = text.find("{", start)
+          total = 0
 
-          if brace_start == -1:
-              raise SystemExit("Could not locate print_debug_stats() opening brace.")
+          for path in files:
+              text = path.read_text()
 
-          depth = 0
-          end = None
+              result = []
+              in_string = False
+              escaped = False
+              changed = False
 
-          for i in range(brace_start, len(text)):
-              if text[i] == "{":
-                  depth += 1
-              elif text[i] == "}":
-                  depth -= 1
-                  if depth == 0:
-                      end = i + 1
-                      break
+              i = 0
 
-          if end is None:
-              raise SystemExit("Could not locate print_debug_stats() closing brace.")
+              while i < len(text):
+                  ch = text[i]
 
-          section = text[start:end]
+                  # Zig multiline strings use \\( ... ) syntax.
+                  # Do not touch those.
+                  if not in_string and text.startswith('\\\\(', i):
+                      j = text.find('\\\\)', i + 3)
 
-          # Convert literal newlines occurring inside quoted Zig strings
-          # into the valid two-character escape sequence \n.
-          result = []
-          in_string = False
-          escaped = False
+                      if j != -1:
+                          block = text[i:j + 3]
+                          result.append(block)
+                          i = j + 3
+                          continue
 
-          for ch in section:
-              if ch == '"' and not escaped:
-                  in_string = not in_string
+                  if ch == '"' and not escaped:
+                      in_string = not in_string
+                      result.append(ch)
+                      escaped = False
+                      i += 1
+                      continue
+
+                  if ch == '\n' and in_string:
+                      result.append('\\n')
+                      changed = True
+                      i += 1
+                      continue
+
                   result.append(ch)
-                  continue
 
-              if ch == '\n' and in_string:
-                  result.append('\\n')
-                  continue
+                  if ch == '\\' and not escaped:
+                      escaped = True
+                  else:
+                      escaped = False
 
-              result.append(ch)
+                  i += 1
 
-              if ch == '\\' and not escaped:
-                  escaped = True
-              else:
-                  escaped = False
+              fixed = ''.join(result)
 
-          fixed = ''.join(result)
+              if changed:
+                  path.write_text(fixed)
+                  total += 1
+                  print(f"REPAIRED: {path}")
 
-          text = text[:start] + fixed + text[end:]
-          path.write_text(text)
-
-          print("NNUE debug strings repaired.")
+          print()
+          print(f"Files repaired: {total}")
           PY
 
-      - name: Show repaired NNUE section
+      - name: Check for remaining broken strings
         run: |
-          echo "===== print_debug_stats() ====="
-          sed -n '/pub fn print_debug_stats/,/^}/p' src/nnue.zig
+          python3 - <<'PY'
+          from pathlib import Path
+
+          errors = []
+
+          for path in Path("src").rglob("*.zig"):
+              text = path.read_text()
+
+              in_string = False
+              escaped = False
+
+              for line_no, line in enumerate(text.splitlines(True), 1):
+                  for ch in line:
+                      if ch == '"' and not escaped:
+                          in_string = not in_string
+
+                      if ch == '\\' and not escaped:
+                          escaped = True
+                      else:
+                          escaped = False
+
+                  # A normal Zig string must not continue onto another
+                  # physical source line.
+                  if in_string:
+                      errors.append((path, line_no))
+
+          if errors:
+              print("ERROR: Possible broken multiline string literals remain:")
+
+              for path, line in errors:
+                  print(f"  {path}:{line}")
+
+              raise SystemExit(1)
+
+          print("OK: No broken multiline Zig string literals detected.")
+          PY
+
+      - name: Show repaired NNUE debug section
+        run: |
+          echo "===== NNUE DEBUG FUNCTIONS ====="
+
+          grep -n -A120 \
+            "pub fn print_debug_stats" \
+            src/nnue.zig || true
 
       - name: Format Zig source
         run: |
-          zig fmt src/*.zig
+          zig fmt src
 
-      - name: Check Zig source
+      - name: Check Zig formatting
         run: |
-          zig fmt --check src/*.zig
+          zig fmt --check src
 
-      - name: Install Android SDK and NDK
+      # ============================================================
+      # ANDROID
+      # ============================================================
+      - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android NDK
         run: |
-          sdkmanager \
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" \
+              -name sdkmanager \
+              -type f \
+              | head -n 1)"
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found."
+            exit 1
+          fi
+
+          echo "Using:"
+          echo "$SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
@@ -146,38 +215,52 @@ jobs:
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
 
-          if [ ! -d "$NDK" ]; then
+          if [ ! -d "$NDK" ] && [ -n "$ANDROID_HOME" ]; then
             NDK="$ANDROID_HOME/ndk/27.2.12479018"
           fi
 
           if [ ! -d "$NDK" ]; then
-            echo "ERROR: Android NDK not found."
+            echo "ERROR: Android NDK 27.2.12479018 not found."
             exit 1
           fi
 
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
-          echo "NDK:"
+          echo "===== NDK ====="
           echo "$NDK"
 
-          echo "AArch64 compiler:"
-          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
-            --version
+          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
 
+          if [ ! -x "$CLANG" ]; then
+            echo "ERROR: Android AArch64 compiler not found:"
+            echo "$CLANG"
+            exit 1
+          fi
+
+          "$CLANG" --version
+
+      # ============================================================
+      # BUILD
+      # ============================================================
       - name: Build Lambergar Android ARM64
         run: |
           echo "===== ZIG VERSION ====="
           zig version
 
-          echo "===== BUILD TARGET ====="
-          zig targets | grep -A3 -B3 android || true
+          echo
+          echo "===== ANDROID TARGETS ====="
+          zig targets | grep -A5 -B5 android || true
 
-          echo "===== BUILD ====="
+          echo
+          echo "===== BUILDING ====="
 
           zig build \
             -Dtarget=aarch64-linux-android.24 \
             -Doptimize=ReleaseFast
 
+      # ============================================================
+      # VERIFY
+      # ============================================================
       - name: Locate binary
         run: |
           echo "===== BUILD OUTPUT ====="
@@ -201,19 +284,22 @@ jobs:
           echo "===== BINARY ====="
           echo "$BIN"
 
+          echo
           echo "===== FILE ====="
           file "$BIN"
 
+          echo
           echo "===== ELF HEADER ====="
           readelf -h "$BIN" | grep -E \
             "Class:|Data:|Type:|OS/ABI:|Machine:"
 
-          echo "===== MACHINE CHECK ====="
+          echo
+          echo "===== ARCHITECTURE CHECK ====="
 
           if file "$BIN" | grep -qi "ARM aarch64"; then
             echo "OK: AArch64 ARM64 binary."
           else
-            echo "ERROR: Binary is not identified as AArch64."
+            echo "ERROR: Binary is not AArch64."
             exit 1
           fi
 
