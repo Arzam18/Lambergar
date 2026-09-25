@@ -68,7 +68,6 @@ pub fn get_debug_stats() DebugStats {
 pub fn print_debug_stats(writer: anytype) !void {
     const stats = get_debug_stats();
     try writer.print("NNUE stats:\n", .{});
-", .{});
     try writer.print("  incremental_calls: {d}
 ", .{stats.incremental_calls});
     try writer.print("  already_computed: {d}
