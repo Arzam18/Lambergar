@@ -67,41 +67,54 @@ pub fn get_debug_stats() DebugStats {
 
 pub fn print_debug_stats(writer: anytype) !void {
     const stats = get_debug_stats();
-    try writer.print("NNUE stats:\n", .{});
-    try writer.print("  incremental_calls: {d}\n", .{stats.incremental_calls});
-    try writer.print("  already_computed: {d}\n", .{stats.already_computed});
-    try writer.print("  full_refresh_gameply0: {d}\n", .{stats.full_refresh_gameply0});
-    try writer.print("  full_refresh_prev_invalid: {d}\n", .{stats.full_refresh_prev_invalid});
-    try writer.print("  null_move_copies: {d}\n", .{stats.null_move_copies});
-    try writer.print("  king_refreshes white/black: {d}/{d}\n", .{ stats.king_refreshes[Color.White.toU4()], stats.king_refreshes[Color.Black.toU4()] });
-    try writer.print("  king_refresh_causes quiet/capture/castle/other: {d}/{d}/{d}/{d}\n", .{
+    try writer.print("NNUE stats:
+", .{});
+    try writer.print("  incremental_calls: {d}
+", .{stats.incremental_calls});
+    try writer.print("  already_computed: {d}
+", .{stats.already_computed});
+    try writer.print("  full_refresh_gameply0: {d}
+", .{stats.full_refresh_gameply0});
+    try writer.print("  full_refresh_prev_invalid: {d}
+", .{stats.full_refresh_prev_invalid});
+    try writer.print("  null_move_copies: {d}
+", .{stats.null_move_copies});
+    try writer.print("  king_refreshes white/black: {d}/{d}
+", .{ stats.king_refreshes[Color.White.toU4()], stats.king_refreshes[Color.Black.toU4()] });
+    try writer.print("  king_refresh_causes quiet/capture/castle/other: {d}/{d}/{d}/{d}
+", .{
         stats.king_refresh_quiet,
         stats.king_refresh_capture,
         stats.king_refresh_castle,
         stats.king_refresh_other,
     });
-    try writer.print("  king_refresh_context main/qsearch/outside: {d}/{d}/{d}\n", .{
+    try writer.print("  king_refresh_context main/qsearch/outside: {d}/{d}/{d}
+", .{
         stats.king_refresh_in_main_search,
         stats.king_refresh_in_qsearch,
         stats.king_refresh_outside_search,
     });
-    try writer.print("  king_refresh_depth <=1/2-3/4-6/7+: {d}/{d}/{d}/{d}\n", .{
+    try writer.print("  king_refresh_depth <=1/2-3/4-6/7+: {d}/{d}/{d}/{d}
+", .{
         stats.king_refresh_depth_le_1,
         stats.king_refresh_depth_2_3,
         stats.king_refresh_depth_4_6,
         stats.king_refresh_depth_ge_7,
     });
-    try writer.print("  king_refresh_move_index 0/1-3/4-7/8+: {d}/{d}/{d}/{d}\n", .{
+    try writer.print("  king_refresh_move_index 0/1-3/4-7/8+: {d}/{d}/{d}/{d}
+", .{
         stats.king_refresh_move_index_0,
         stats.king_refresh_move_index_1_3,
         stats.king_refresh_move_index_4_7,
         stats.king_refresh_move_index_ge_8,
     });
-    try writer.print("  king_refresh_pv pv/nonpv: {d}/{d}\n", .{
+    try writer.print("  king_refresh_pv pv/nonpv: {d}/{d}
+", .{
         stats.king_refresh_in_pv,
         stats.king_refresh_in_nonpv,
     });
-    try writer.print("  incremental_side_updates white/black: {d}/{d}\n", .{ stats.incremental_side_updates[Color.White.toU4()], stats.incremental_side_updates[Color.Black.toU4()] });
+    try writer.print("  incremental_side_updates white/black: {d}/{d}
+", .{ stats.incremental_side_updates[Color.White.toU4()], stats.incremental_side_updates[Color.Black.toU4()] });
 }
 
 pub const SearchContext = enum {
@@ -229,9 +242,11 @@ pub const DeltaPieces = struct {
     }
 
     pub fn debug_print(self: *DeltaPieces) void {
-        std.debug.print("DeltaPieces (count = {}):\n", .{self.count});
+        std.debug.print("DeltaPieces (count = {}):
+", .{self.count});
         for (0..self.count) |i| {
-            std.debug.print("  Piece: {}, From: {}, To: {}\n", .{ self.pieces[i], self.from[i], self.to[i] });
+            std.debug.print("  Piece: {}, From: {}, To: {}
+", .{ self.pieces[i], self.from[i], self.to[i] });
         }
     }
 };
@@ -412,7 +427,8 @@ pub fn init_specific_net(allocator: std.mem.Allocator, nnue_file_name: []const u
     const file = try compat.cwdOpenReadonlyFile(nnue_file_name);
     defer compat.closeFile(file);
 
-    std.debug.print("NNUE file loaded: {s}\n", .{nnue_file_name});
+    std.debug.print("NNUE file loaded: {s}
+", .{nnue_file_name});
 
     const NNUE_FILESIZE: usize = 10_507_097;
     const nnue_data = try allocator.alloc(u8, NNUE_FILESIZE);
@@ -442,7 +458,8 @@ pub fn init(allocator: std.mem.Allocator) !void {
     const file = try compat.cwdOpenReadonlyFile(NNUE_FILE);
     defer compat.closeFile(file);
 
-    std.debug.print("NNUE file loaded: {s}\n", .{NNUE_FILE});
+    std.debug.print("NNUE file loaded: {s}
+", .{NNUE_FILE});
     const NNUE_FILESIZE: usize = 10_507_097; //10_507_097; //21_024_768;
     const nnue_data = try allocator.alloc(u8, NNUE_FILESIZE);
     defer allocator.free(nnue_data);
@@ -761,6 +778,154 @@ fn transform(
     }
 }
 
+inline fn affine_neon(
+    input: []const u8,
+    output: []u8,
+    biases: []const i32,
+    weights: []const i8,
+    comptime input_len: usize,
+    comptime output_len: usize,
+) void {
+    // AArch64 Advanced SIMD (NEON) has 128-bit vector registers.  Keep the
+    // arithmetic in 16-bit lanes for the u8*i8 products, then widen to 32-bit
+    // lanes before accumulating.  Each product is safely inside i16 because
+    // the NNUE input is clipped to [0, 127] and weights are i8.
+    const VecI16 = @Vector(16, i16);
+    const VecI32 = @Vector(8, i32);
+
+    comptime var out_idx: usize = 0;
+    inline while (out_idx < output_len) : (out_idx += 1) {
+        var vec_sum: VecI32 = @splat(@as(i32, 0));
+        const w_base = comptime out_idx * input_len;
+        var i: usize = 0;
+
+        // Process two 128-bit NEON vectors per loop iteration.  ReleaseFast
+        // can still unroll this further when profitable, while keeping the
+        // source independent of architecture-specific assembly.
+        while (i + 32 <= input_len) : (i += 32) {
+            const x0_u8: @Vector(16, u8) = input[i..][0..16].*;
+            const w0_i8: @Vector(16, i8) = weights[w_base + i ..][0..16].*;
+            const x0: VecI16 = @intCast(x0_u8);
+            const w0: VecI16 = @intCast(w0_i8);
+            const p0: VecI16 = x0 * w0;
+            const p0_lo: VecI32 = @intCast(p0[0..8].*);
+            const p0_hi: VecI32 = @intCast(p0[8..16].*);
+            vec_sum += p0_lo + p0_hi;
+
+            const x1_u8: @Vector(16, u8) = input[i + 16 ..][0..16].*;
+            const w1_i8: @Vector(16, i8) = weights[w_base + i + 16 ..][0..16].*;
+            const x1: VecI16 = @intCast(x1_u8);
+            const w1: VecI16 = @intCast(w1_i8);
+            const p1: VecI16 = x1 * w1;
+            const p1_lo: VecI32 = @intCast(p1[0..8].*);
+            const p1_hi: VecI32 = @intCast(p1[8..16].*);
+            vec_sum += p1_lo + p1_hi;
+        }
+
+        while (i + 16 <= input_len) : (i += 16) {
+            const x_u8: @Vector(16, u8) = input[i..][0..16].*;
+            const w_i8: @Vector(16, i8) = weights[w_base + i ..][0..16].*;
+            const x: VecI16 = @intCast(x_u8);
+            const w: VecI16 = @intCast(w_i8);
+            const product: VecI16 = x * w;
+            const product_lo: VecI32 = @intCast(product[0..8].*);
+            const product_hi: VecI32 = @intCast(product[8..16].*);
+            vec_sum += product_lo + product_hi;
+        }
+
+        // Keep this robust if a future NNUE layer uses an input size that is
+        // not divisible by 16. Current Lambergar layers are 256 and 16.
+        var scalar_sum: i32 = 0;
+        while (i < input_len) : (i += 1) {
+            scalar_sum += @as(i32, input[i]) * @as(i32, weights[w_base + i]);
+        }
+
+        var sum = biases[out_idx] + @reduce(.Add, vec_sum) + scalar_sum;
+        sum = std.math.clamp(sum >> 6, 0, 127);
+        output[out_idx] = @intCast(sum);
+    }
+}
+
+inline fn affine_generic(
+    input: []const u8,
+    output: []u8,
+    biases: []const i32,
+    weights: []const i8,
+    comptime input_len: usize,
+    comptime output_len: usize,
+) void {
+    comptime var out_idx: usize = 0;
+    inline while (out_idx < output_len) : (out_idx += 1) {
+        var sum = biases[out_idx];
+        var vec_sum: @Vector(16, i32) = @splat(@as(i32, 0));
+        var i: usize = 0;
+        while (i + 16 <= input_len) : (i += 16) {
+            const w_base = out_idx * input_len + i;
+            const w_vec: @Vector(16, i32) = @as(@Vector(16, i32), weights[w_base..][0..16].*);
+            const x_vec: @Vector(16, i32) = @as(@Vector(16, i32), input[i..][0..16].*);
+            vec_sum += x_vec * w_vec;
+        }
+        sum += @reduce(.Add, vec_sum);
+        while (i < input_len) : (i += 1) {
+            const w_base = out_idx * input_len + i;
+            sum += @as(i32, input[i]) * @as(i32, weights[w_base]);
+        }
+        sum = std.math.clamp(sum >> 6, 0, 127);
+        output[out_idx] = @intCast(sum);
+    }
+}
+
+inline fn affine_x86(
+    input: []const u8,
+    output: []u8,
+    biases: []const i32,
+    weights: []const i8,
+    comptime input_len: usize,
+    comptime output_len: usize,
+) void {
+    // x86-64 fast path: VPMADDUBSW + VPMADDWD, processing 32 elements per
+    // iteration. This is kept isolated from the ARM build so the AArch64
+    // compiler never has to parse/emit x86 inline assembly.
+    comptime var out_idx: usize = 0;
+    inline while (out_idx < output_len) : (out_idx += 1) {
+        var sum = biases[out_idx];
+        var vec_sum: @Vector(8, i32) = @splat(@as(i32, 0));
+        const kOnes: @Vector(16, i16) = @splat(1);
+        const w_base = comptime out_idx * input_len;
+        var i: usize = 0;
+
+        while (i + 32 <= input_len) : (i += 32) {
+            const x_chunk: @Vector(32, u8) = input[i..][0..32].*;
+            const w_chunk: @Vector(32, i8) = weights[w_base + i ..][0..32].*;
+            const maddubs: @Vector(16, i16) = asm volatile (
+                "vpmaddubsw %[w], %[x], %[r]"
+                : [r] "=x" (-> @Vector(16, i16))
+                : [x] "x" (x_chunk), [w] "x" (w_chunk)
+            );
+            vec_sum += asm volatile (
+                "vpmaddwd %[ones], %[a], %[r]"
+                : [r] "=x" (-> @Vector(8, i32))
+                : [a] "x" (maddubs), [ones] "x" (kOnes)
+            );
+        }
+
+        // Current NNUE layers are divisible by 32. Keep a vector fallback for
+        // any future x86 layer with a 16-wide remainder.
+        while (i + 16 <= input_len) : (i += 16) {
+            const w_vec: @Vector(16, i32) = @as(@Vector(16, i32), weights[w_base + i ..][0..16].*);
+            const x_vec: @Vector(16, i32) = @as(@Vector(16, i32), input[i..][0..16].*);
+            sum += @reduce(.Add, x_vec * w_vec);
+        }
+        while (i < input_len) : (i += 1) {
+            sum += @as(i32, input[i]) * @as(i32, weights[w_base + i]);
+        }
+
+        sum += @reduce(.Add, vec_sum);
+        sum = std.math.clamp(sum >> 6, 0, 127);
+        output[out_idx] = @intCast(sum);
+    }
+}
+
 inline fn affine(
     input: []const u8,
     output: []u8,
@@ -769,55 +934,15 @@ inline fn affine(
     comptime input_len: usize,
     comptime output_len: usize,
 ) void {
-    if (comptime input_len >= 32 and input_len % 32 == 0) {
-        // Fast path: VPMADDUBSW + VPMADDWD, processes 32 elements per iteration.
-        // VPMADDUBSW: 32 (u8 × i8) pairs → 16 i16, adds adjacent products.
-        //   No saturation: max pair sum = 127×127 + 127×127 = 32 258 < 32 767.
-        // VPMADDWD × kOnes: 16 i16 → 8 i32, sums adjacent pairs.
-        // Avoids explicit widening to i32 and uses ~3 instructions per 32 elements
-        // instead of the ~12 that the scalar-extend + VPMULLD path would need.
-        const kOnes: @Vector(16, i16) = @splat(1);
-        comptime var out_idx: usize = 0;
-        inline while (out_idx < output_len) : (out_idx += 1) {
-            var sum = biases[out_idx];
-            var vec_sum: @Vector(8, i32) = @splat(0);
-            const w_base = comptime out_idx * input_len;
-            var i: usize = 0;
-            while (i + 32 <= input_len) : (i += 32) {
-                const x_chunk: @Vector(32, u8) = input[i..][0..32].*;
-                const w_chunk: @Vector(32, i8) = weights[w_base + i ..][0..32].*;
-                const maddubs: @Vector(16, i16) = asm volatile (
-                    "vpmaddubsw %[w], %[x], %[r]"
-                    : [r] "=x" (-> @Vector(16, i16))
-                    : [x] "x" (x_chunk), [w] "x" (w_chunk)
-                );
-                vec_sum += asm volatile (
-                    "vpmaddwd %[ones], %[a], %[r]"
-                    : [r] "=x" (-> @Vector(8, i32))
-                    : [a] "x" (maddubs), [ones] "x" (kOnes)
-                );
-            }
-            sum += @reduce(.Add, vec_sum);
-            sum = std.math.clamp(sum >> 6, 0, 127);
-            output[out_idx] = @intCast(sum);
-        }
+    if (comptime builtin.cpu.arch == .x86_64) {
+        affine_x86(input, output, biases, weights, input_len, output_len);
+    } else if (comptime builtin.cpu.arch == .aarch64) {
+        // NEON/Advanced SIMD is mandatory in AArch64, so this path is safe for
+        // generic ARM64 Android/Linux builds without requiring optional CPU
+        // features such as dotprod.
+        affine_neon(input, output, biases, weights, input_len, output_len);
     } else {
-        // Fallback for inputs not divisible by 32 (e.g. affine_l2 with 16 inputs).
-        comptime var out_idx: usize = 0;
-        inline while (out_idx < output_len) : (out_idx += 1) {
-            var sum = biases[out_idx];
-            var vec_sum: @Vector(16, i32) = @splat(@as(i32, 0));
-            var i: usize = 0;
-            while (i + 16 <= input_len) : (i += 16) {
-                const w_base = out_idx * input_len + i;
-                const w_vec: @Vector(16, i32) = @as(@Vector(16, i32), weights[w_base..][0..16].*);
-                const x_vec: @Vector(16, i32) = input[i..][0..16].*;
-                vec_sum += x_vec * w_vec;
-            }
-            sum += @reduce(.Add, vec_sum);
-            sum = std.math.clamp(sum >> 6, 0, 127);
-            output[out_idx] = @intCast(sum);
-        }
+        affine_generic(input, output, biases, weights, input_len, output_len);
     }
 }
 
@@ -861,7 +986,8 @@ pub fn evaluate(curr_accu: Accumulator, comptime player: Color) i32 {
 fn print_microbench_result(writer: anytype, name: []const u8, total_ops: usize, nanos: u64, checksum: i64) !void {
     const ns_per_op = @as(f64, @floatFromInt(nanos)) / @as(f64, @floatFromInt(total_ops));
     const ops_per_sec = (@as(f64, @floatFromInt(total_ops)) * 1_000_000_000.0) / @as(f64, @floatFromInt(nanos));
-    try writer.print("{s}: {d} ops, {d} ns total, {d:.2} ns/op, {d:.2} ops/s, checksum {d}\n", .{
+    try writer.print("{s}: {d} ops, {d} ns total, {d:.2} ns/op, {d:.2} ops/s, checksum {d}
+", .{
         name,
         total_ops,
         nanos,
@@ -951,7 +1077,8 @@ pub fn microbench(allocator: std.mem.Allocator, iterations: usize, writer: anyty
         }
     }
 
-    try writer.print("NNUE microbench: {d} positions x {d} iterations\n", .{ fens.len, iterations });
+    try writer.print("NNUE microbench: {d} positions x {d} iterations
+", .{ fens.len, iterations });
 
     const total_ops: usize = iterations * fens.len;
 
@@ -1043,4 +1170,60 @@ pub fn microbench(allocator: std.mem.Allocator, iterations: usize, writer: anyty
         }
     }
     try print_microbench_result(writer, "evaluate", total_ops, timer.read(), checksum);
+}
+
+// The ARM path deliberately keeps the arithmetic exact relative to the scalar
+// u8 * i8 dot product. This test catches accidental truncation/unsigned-cast
+// regressions in the NEON-friendly widening sequence.
+test "NNUE NEON widening dot product" {
+    const VecI16 = @Vector(16, i16);
+    const x: @Vector(16, u8) = .{ 0, 1, 2, 3, 7, 9, 16, 31, 47, 63, 79, 95, 111, 120, 126, 127 };
+    const w: @Vector(16, i8) = .{ -128, -17, 23, 41, -63, 7, -9, 31, -32, 64, -71, 12, 99, -100, 127, -128 };
+    const x16: VecI16 = @intCast(x);
+    const w16: VecI16 = @intCast(w);
+    const prod: VecI16 = x16 * w16;
+
+    var scalar: i32 = 0;
+    for (0..16) |i| {
+        scalar += @as(i32, x[i]) * @as(i32, w[i]);
+    }
+
+    const lo: @Vector(8, i32) = @intCast(prod[0..8].*);
+    const hi: @Vector(8, i32) = @intCast(prod[8..16].*);
+    try std.testing.expectEqual(scalar, @reduce(.Add, lo) + @reduce(.Add, hi));
+}
+
+
+test "AArch64 NNUE affine matches scalar reference" {
+    const input_len = 50;
+    const output_len = 3;
+
+    var input: [input_len]u8 = undefined;
+    var weights: [input_len * output_len]i8 = undefined;
+    var biases: [output_len]i32 = undefined;
+    var output: [output_len]u8 = undefined;
+
+    for (0..input_len) |i| {
+        input[i] = @intCast((i * 37 + 11) % 128);
+    }
+
+    for (0..output_len) |out_idx| {
+        biases[out_idx] = @as(i32, @intCast(out_idx * 97)) - 101;
+        for (0..input_len) |i| {
+            const raw = (out_idx * 19 + i * 23 + 7) % 255;
+            weights[out_idx * input_len + i] = @as(i8, @intCast(@as(i32, raw) - 128));
+        }
+    }
+
+    affine_neon(&input, &output, &biases, &weights, input_len, output_len);
+
+    for (0..output_len) |out_idx| {
+        var scalar_sum = biases[out_idx];
+        for (0..input_len) |i| {
+            scalar_sum += @as(i32, input[i]) * @as(i32, weights[out_idx * input_len + i]);
+        }
+
+        scalar_sum = std.math.clamp(scalar_sum >> 6, 0, 127);
+        try std.testing.expectEqual(@as(u8, @intCast(scalar_sum)), output[out_idx]);
+    }
 }
