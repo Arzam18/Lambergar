@@ -52,15 +52,19 @@ def build_ver(command, prefix_name, bin_dir):
 
 
 def build_command(zig, target, cpu, prefix_name):
-    return [
+    command = [
         zig,
         "build",
         f"-Dtarget={target}",
         "--release=fast",
-        f"-Dcpu={cpu}",
+    ]
+    if cpu is not None:
+        command.append(f"-Dcpu={cpu}")
+    command.extend([
         "--prefix",
         prefix_name,
-    ]
+    ])
+    return command
 
 
 def parse_args():
@@ -100,14 +104,14 @@ def main():
     prefix_name = f"lambergar-{version}-x86_64-linux-AVX2"
     build_ver(build_command(args.zig, "x86_64-linux", "x86_64_v3", prefix_name), prefix_name, bin_dir)
 
-    print("Skipping aarch64 Linux: NNUE AVX2 inline asm is x86_64-only")
+    prefix_name = f"lambergar-{version}-aarch64-linux-NEON"
+    build_ver(build_command(args.zig, "aarch64-linux", None, prefix_name), prefix_name, bin_dir)
 
     print("Skipping macOS x86_64 VINTAGE/POPCNT: NNUE AVX2 inline asm requires x86_64_v3+")
 
     prefix_name = f"lambergar-{version}-x86_64-macos-AVX2"
     build_ver(build_command(args.zig, "x86_64-macos", "x86_64_v3", prefix_name), prefix_name, bin_dir)
 
-    print("Skipping aarch64 macOS: NNUE AVX2 inline asm is x86_64-only")
 
 
 if __name__ == "__main__":
