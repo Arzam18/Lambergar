@@ -38,7 +38,7 @@ jobs:
             binutils
 
       # ============================================================
-      # ZIG
+      # INSTALL ZIG
       # ============================================================
       - name: Install Zig 0.15.1
         run: |
@@ -58,7 +58,7 @@ jobs:
           "$ZIG_DIR/zig" version
 
       # ============================================================
-      # SOURCE TREE
+      # SHOW SOURCE
       # ============================================================
       - name: Show source tree
         run: |
@@ -67,6 +67,9 @@ jobs:
 
       # ============================================================
       # REPAIR BROKEN ZIG STRING LITERALS
+      #
+      # Some generated NNUE debug strings contain actual newline
+      # characters inside normal Zig string literals.
       # ============================================================
       - name: Repair broken Zig string literals
         run: |
@@ -138,7 +141,108 @@ jobs:
           PY
 
       # ============================================================
-      # CHECK STRINGS
+      # FIX NEON VECTOR LANE EXTRACTION
+      #
+      # Zig vectors cannot be sliced using:
+      #
+      #     vector[0..8].*
+      #
+      # Use @shuffle() to extract the lanes instead.
+      # ============================================================
+      - name: Fix NEON vector lane extraction
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/nnue.zig")
+          text = path.read_text()
+
+          replacements = {
+              'const p0_lo: VecI32 = @intCast(p0[0..8].*);':
+              '''const p0_lo: VecI32 = @intCast(@shuffle(
+                  i16,
+                  p0,
+                  p0,
+                  [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
+              ));''',
+
+              'const p0_hi: VecI32 = @intCast(p0[8..16].*);':
+              '''const p0_hi: VecI32 = @intCast(@shuffle(
+                  i16,
+                  p0,
+                  p0,
+                  [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
+              ));''',
+
+              'const p1_lo: VecI32 = @intCast(p1[0..8].*);':
+              '''const p1_lo: VecI32 = @intCast(@shuffle(
+                  i16,
+                  p1,
+                  p1,
+                  [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
+              ));''',
+
+              'const p1_hi: VecI32 = @intCast(p1[8..16].*);':
+              '''const p1_hi: VecI32 = @intCast(@shuffle(
+                  i16,
+                  p1,
+                  p1,
+                  [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
+              ));''',
+
+              'const product_lo: VecI32 = @intCast(product[0..8].*);':
+              '''const product_lo: VecI32 = @intCast(@shuffle(
+                  i16,
+                  product,
+                  product,
+                  [8]i32{ 0, 1, 2, 3, 4, 5, 6, 7 },
+              ));''',
+
+              'const product_hi: VecI32 = @intCast(product[8..16].*);':
+              '''const product_hi: VecI32 = @intCast(@shuffle(
+                  i16,
+                  product,
+                  product,
+                  [8]i32{ 8, 9, 10, 11, 12, 13, 14, 15 },
+              ));',
+          }
+
+          fixed_count = 0
+
+          for old, new in replacements.items():
+              if old in text:
+                  text = text.replace(old, new)
+                  fixed_count += 1
+                  print(f"FIXED: {old}")
+              else:
+                  print(f"NOT FOUND: {old}")
+
+          path.write_text(text)
+
+          print()
+          print(f"Vector expressions fixed: {fixed_count}/6")
+          PY
+
+      # ============================================================
+      # VERIFY NO VECTOR SLICES REMAIN
+      # ============================================================
+      - name: Verify NEON vector fixes
+        run: |
+          echo "===== CHECKING FOR INVALID VECTOR SLICES ====="
+
+          if grep -nE \
+            '@intCast\((p0|p1|product)\[[0-9]+\.\.[0-9]+\]\.\*\)' \
+            src/nnue.zig; then
+
+            echo
+            echo "ERROR: Invalid vector slicing remains."
+            exit 1
+          fi
+
+          echo "OK: No invalid vector slices found."
+
+      # ============================================================
+      # CHECK FOR BROKEN MULTILINE STRINGS
       # ============================================================
       - name: Check for remaining broken strings
         run: |
@@ -178,7 +282,7 @@ jobs:
           PY
 
       # ============================================================
-      # FORMAT
+      # FORMAT ZIG
       # ============================================================
       - name: Format Zig source
         run: |
@@ -199,14 +303,18 @@ jobs:
 
           if [ -n "${ANDROID_SDK_ROOT:-}" ] && \
              [ -d "$ANDROID_SDK_ROOT" ]; then
+
             SDK="$ANDROID_SDK_ROOT"
 
           elif [ -n "${ANDROID_HOME:-}" ] && \
                [ -d "$ANDROID_HOME" ]; then
+
             SDK="$ANDROID_HOME"
 
           elif [ -d "/usr/local/lib/android/sdk" ]; then
+
             SDK="/usr/local/lib/android/sdk"
+
           fi
 
           if [ -z "$SDK" ]; then
@@ -223,7 +331,7 @@ jobs:
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
 
       # ============================================================
-      # SDKMANAGER
+      # LOCATE SDKMANAGER
       # ============================================================
       - name: Locate sdkmanager
         run: |
@@ -240,7 +348,9 @@ jobs:
               -type f \
               -name sdkmanager \
               -perm -111 \
-              2>/dev/null | sort -V | tail -n 1)"
+              2>/dev/null \
+              | sort -V \
+              | tail -n 1)"
           fi
 
           if [ -z "$SDKMANAGER" ]; then
@@ -263,7 +373,7 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
       # ============================================================
-      # INSTALL NDK
+      # INSTALL ANDROID NDK
       # ============================================================
       - name: Install Android NDK
         run: |
@@ -286,10 +396,7 @@ jobs:
             exit 1
           fi
 
-          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
-
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-
           SYSROOT="$TOOLCHAIN/sysroot"
 
           CLANG="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
@@ -306,12 +413,20 @@ jobs:
             exit 1
           fi
 
-          echo "NDK=$NDK"
-          echo "TOOLCHAIN=$TOOLCHAIN"
-          echo "SYSROOT=$SYSROOT"
-
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
           echo "NDK_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
           echo "ANDROID_SYSROOT=$SYSROOT" >> "$GITHUB_ENV"
+
+          echo "===== NDK ====="
+          echo "$NDK"
+
+          echo
+          echo "===== TOOLCHAIN ====="
+          echo "$TOOLCHAIN"
+
+          echo
+          echo "===== SYSROOT ====="
+          echo "$SYSROOT"
 
           echo
           echo "===== AARCH64 CLANG ====="
@@ -325,7 +440,6 @@ jobs:
           SYSROOT="$ANDROID_SYSROOT"
 
           CRT_DIR="$SYSROOT/usr/lib/aarch64-linux-android/24"
-
           ARCH_INCLUDE="$SYSROOT/usr/include/aarch64-linux-android"
 
           if [ ! -d "$CRT_DIR" ]; then
@@ -353,7 +467,7 @@ jobs:
           cat android-libc.conf
 
       # ============================================================
-      # VERIFY NDK LIBC FILES
+      # VERIFY ANDROID LIBC
       # ============================================================
       - name: Verify Android libc
         run: |
@@ -385,21 +499,19 @@ jobs:
           fi
 
       # ============================================================
-      # INSPECT BUILD OPTIONS
+      # INSPECT BUILD
       # ============================================================
       - name: Inspect Lambergar build
         run: |
           echo "===== ZIG BUILD HELP ====="
-
           zig build -h || true
 
           echo
           echo "===== BUILD.ZIG ====="
-
           sed -n '1,280p' build.zig
 
       # ============================================================
-      # BUILD
+      # BUILD LAMBERGAR
       # ============================================================
       - name: Build Lambergar Android ARM64
         run: |
@@ -408,7 +520,6 @@ jobs:
 
           echo
           echo "===== BUILD TARGET ====="
-
           zig targets | grep -A5 -B5 android || true
 
           echo
@@ -419,7 +530,7 @@ jobs:
             --libc android-libc.conf
 
       # ============================================================
-      # LOCATE OUTPUT
+      # LOCATE BUILD OUTPUT
       # ============================================================
       - name: Locate binary
         run: |
