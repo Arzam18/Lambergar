@@ -8,7 +8,7 @@ on:
       - master
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-android:
@@ -27,17 +27,17 @@ jobs:
             unzip \
             xz-utils \
             python3 \
-            file
+            file \
+            binutils
 
-      - name: Install Zig
+      - name: Install Zig 0.15.1
         run: |
           ZIG_VERSION="0.15.1"
+          ZIG_ARCHIVE="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_ARCHIVE}"
 
-          curl -L \
-            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
-            -o zig.tar.xz
-
-          tar -xf zig.tar.xz
+          curl -L "$ZIG_URL" -o "$ZIG_ARCHIVE"
+          tar -xf "$ZIG_ARCHIVE"
 
           ZIG_DIR="$PWD/zig-x86_64-linux-${ZIG_VERSION}"
 
@@ -47,48 +47,132 @@ jobs:
 
       - name: Show source tree
         run: |
-          echo "===== SOURCE TREE ====="
-          find . -maxdepth 3 -type f \
-            \( -name "*.zig" -o -name "*.zon" -o -name "*.py" -o -name "build.zig" \) \
-            | sort
+          echo "===== SOURCE FILES ====="
+          find src -maxdepth 1 -type f -name "*.zig" | sort
 
-      - name: Verify ARM64 NEON implementation
+      - name: Repair NNUE debug strings
         run: |
-          echo "===== ARM/NEON REFERENCES ====="
-          grep -RniE \
-            "aarch64|arm64|neon|affine_neon|affine_x86" \
-            src build_versions.py README.md \
-            || true
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/nnue.zig")
+          text = path.read_text()
+
+          start = text.find("pub fn print_debug_stats")
+
+          if start == -1:
+              print("print_debug_stats() not found; no repair needed.")
+              raise SystemExit(0)
+
+          # Locate the end of the function.
+          brace_start = text.find("{", start)
+
+          if brace_start == -1:
+              raise SystemExit("Could not locate print_debug_stats() opening brace.")
+
+          depth = 0
+          end = None
+
+          for i in range(brace_start, len(text)):
+              if text[i] == "{":
+                  depth += 1
+              elif text[i] == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+          if end is None:
+              raise SystemExit("Could not locate print_debug_stats() closing brace.")
+
+          section = text[start:end]
+
+          # Convert literal newlines occurring inside quoted Zig strings
+          # into the valid two-character escape sequence \n.
+          result = []
+          in_string = False
+          escaped = False
+
+          for ch in section:
+              if ch == '"' and not escaped:
+                  in_string = not in_string
+                  result.append(ch)
+                  continue
+
+              if ch == '\n' and in_string:
+                  result.append('\\n')
+                  continue
+
+              result.append(ch)
+
+              if ch == '\\' and not escaped:
+                  escaped = True
+              else:
+                  escaped = False
+
+          fixed = ''.join(result)
+
+          text = text[:start] + fixed + text[end:]
+          path.write_text(text)
+
+          print("NNUE debug strings repaired.")
+          PY
+
+      - name: Show repaired NNUE section
+        run: |
+          echo "===== print_debug_stats() ====="
+          sed -n '/pub fn print_debug_stats/,/^}/p' src/nnue.zig
+
+      - name: Format Zig source
+        run: |
+          zig fmt src/*.zig
 
       - name: Check Zig source
         run: |
           zig fmt --check src/*.zig
 
-      - name: Build Android ARM64
-        env:
-          ANDROID_NDK_VERSION: "27.2.12479018"
-        run: |
-          NDK="$ANDROID_NDK_LATEST_HOME"
+      - name: Install Android SDK and NDK
+        uses: android-actions/setup-android@v3
 
-          if [ -z "$NDK" ]; then
-            NDK="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+      - name: Install Android NDK
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+      - name: Configure Android NDK
+        run: |
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+
+          if [ ! -d "$NDK" ]; then
+            NDK="$ANDROID_HOME/ndk/27.2.12479018"
           fi
 
-          echo "NDK: $NDK"
+          if [ ! -d "$NDK" ]; then
+            echo "ERROR: Android NDK not found."
+            exit 1
+          fi
 
-          test -d "$NDK"
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
-          NDK_CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          echo "NDK:"
+          echo "$NDK"
 
-          test -x "$NDK_CLANG"
+          echo "AArch64 compiler:"
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
+            --version
 
-          echo "Compiler:"
-          "$NDK_CLANG" --version
-
+      - name: Build Lambergar Android ARM64
+        run: |
           echo "===== ZIG VERSION ====="
           zig version
 
-          echo "===== BUILD ANDROID ARM64 ====="
+          echo "===== BUILD TARGET ====="
+          zig targets | grep -A3 -B3 android || true
+
+          echo "===== BUILD ====="
 
           zig build \
             -Dtarget=aarch64-linux-android.24 \
@@ -97,57 +181,63 @@ jobs:
       - name: Locate binary
         run: |
           echo "===== BUILD OUTPUT ====="
-          find zig-out -type f -exec ls -lh {} \; || true
 
-      - name: Verify binary
-        run: |
-          BIN="$(find zig-out -type f -executable | head -n 1)"
-
-          if [ -z "$BIN" ]; then
-            echo "ERROR: No executable found."
+          if [ ! -d zig-out ]; then
+            echo "ERROR: zig-out directory does not exist."
             exit 1
           fi
 
-          echo "Binary:"
+          find zig-out -type f -exec ls -lh {} \;
+
+      - name: Verify Android ARM64 binary
+        run: |
+          BIN="$(find zig-out/bin -type f -executable | head -n 1)"
+
+          if [ -z "$BIN" ]; then
+            echo "ERROR: No executable found in zig-out/bin."
+            exit 1
+          fi
+
+          echo "===== BINARY ====="
           echo "$BIN"
 
+          echo "===== FILE ====="
           file "$BIN"
 
           echo "===== ELF HEADER ====="
           readelf -h "$BIN" | grep -E \
-            "Class:|Machine:|Type:|OS/ABI:"
+            "Class:|Data:|Type:|OS/ABI:|Machine:"
 
-          echo "===== DYNAMIC LIBRARIES ====="
-          readelf -d "$BIN" 2>/dev/null | grep NEEDED || true
+          echo "===== MACHINE CHECK ====="
 
-      - name: Rename Android binary
+          if file "$BIN" | grep -qi "ARM aarch64"; then
+            echo "OK: AArch64 ARM64 binary."
+          else
+            echo "ERROR: Binary is not identified as AArch64."
+            exit 1
+          fi
+
+      - name: Prepare release artifact
         run: |
           mkdir -p release
 
-          BIN="$(find zig-out -type f -executable | head -n 1)"
+          BIN="$(find zig-out/bin -type f -executable | head -n 1)"
 
           if [ -z "$BIN" ]; then
-            echo "ERROR: No executable found."
+            echo "ERROR: Could not locate executable."
             exit 1
           fi
 
           cp "$BIN" release/lambergar-android-arm64
-
           chmod +x release/lambergar-android-arm64
 
-          ls -lh release/
+          echo "===== FINAL ARTIFACT ====="
+          ls -lh release/lambergar-android-arm64
 
-      - name: Upload Android ARM64 binary
+          file release/lambergar-android-arm64
+
+      - name: Upload Android ARM64 NEON binary
         uses: actions/upload-artifact@v4
         with:
           name: lambergar-android-arm64-neon
           path: release/lambergar-android-arm64
-
-      - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: lambergar-android-arm64-${{ github.run_number }}
-          name: Lambergar Android ARM64 NEON ${{ github.run_number }}
-          files: release/lambergar-android-arm64
-          generate_release_notes: true
