@@ -1,0 +1,153 @@
+name: Lambergar Android ARM64 NEON
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Lambergar Android ARM64 NEON
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            curl \
+            unzip \
+            xz-utils \
+            python3 \
+            file
+
+      - name: Install Zig
+        run: |
+          ZIG_VERSION="0.15.1"
+
+          curl -L \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+            -o zig.tar.xz
+
+          tar -xf zig.tar.xz
+
+          ZIG_DIR="$PWD/zig-x86_64-linux-${ZIG_VERSION}"
+
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+
+          "$ZIG_DIR/zig" version
+
+      - name: Show source tree
+        run: |
+          echo "===== SOURCE TREE ====="
+          find . -maxdepth 3 -type f \
+            \( -name "*.zig" -o -name "*.zon" -o -name "*.py" -o -name "build.zig" \) \
+            | sort
+
+      - name: Verify ARM64 NEON implementation
+        run: |
+          echo "===== ARM/NEON REFERENCES ====="
+          grep -RniE \
+            "aarch64|arm64|neon|affine_neon|affine_x86" \
+            src build_versions.py README.md \
+            || true
+
+      - name: Check Zig source
+        run: |
+          zig fmt --check src/*.zig
+
+      - name: Build Android ARM64
+        env:
+          ANDROID_NDK_VERSION: "27.2.12479018"
+        run: |
+          NDK="$ANDROID_NDK_LATEST_HOME"
+
+          if [ -z "$NDK" ]; then
+            NDK="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          fi
+
+          echo "NDK: $NDK"
+
+          test -d "$NDK"
+
+          NDK_CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+
+          test -x "$NDK_CLANG"
+
+          echo "Compiler:"
+          "$NDK_CLANG" --version
+
+          echo "===== ZIG VERSION ====="
+          zig version
+
+          echo "===== BUILD ANDROID ARM64 ====="
+
+          zig build \
+            -Dtarget=aarch64-linux-android.24 \
+            -Doptimize=ReleaseFast
+
+      - name: Locate binary
+        run: |
+          echo "===== BUILD OUTPUT ====="
+          find zig-out -type f -exec ls -lh {} \; || true
+
+      - name: Verify binary
+        run: |
+          BIN="$(find zig-out -type f -executable | head -n 1)"
+
+          if [ -z "$BIN" ]; then
+            echo "ERROR: No executable found."
+            exit 1
+          fi
+
+          echo "Binary:"
+          echo "$BIN"
+
+          file "$BIN"
+
+          echo "===== ELF HEADER ====="
+          readelf -h "$BIN" | grep -E \
+            "Class:|Machine:|Type:|OS/ABI:"
+
+          echo "===== DYNAMIC LIBRARIES ====="
+          readelf -d "$BIN" 2>/dev/null | grep NEEDED || true
+
+      - name: Rename Android binary
+        run: |
+          mkdir -p release
+
+          BIN="$(find zig-out -type f -executable | head -n 1)"
+
+          if [ -z "$BIN" ]; then
+            echo "ERROR: No executable found."
+            exit 1
+          fi
+
+          cp "$BIN" release/lambergar-android-arm64
+
+          chmod +x release/lambergar-android-arm64
+
+          ls -lh release/
+
+      - name: Upload Android ARM64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambergar-android-arm64-neon
+          path: release/lambergar-android-arm64
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: lambergar-android-arm64-${{ github.run_number }}
+          name: Lambergar Android ARM64 NEON ${{ github.run_number }}
+          files: release/lambergar-android-arm64
+          generate_release_notes: true
