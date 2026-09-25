@@ -16,11 +16,15 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
       - name: Checkout
         uses: actions/checkout@v4
 
       # ============================================================
-      # BASIC DEPENDENCIES
+      # DEPENDENCIES
       # ============================================================
       - name: Install dependencies
         run: |
@@ -34,7 +38,7 @@ jobs:
             binutils
 
       # ============================================================
-      # ZIG
+      # INSTALL ZIG
       # ============================================================
       - name: Install Zig 0.15.1
         run: |
@@ -134,7 +138,7 @@ jobs:
           PY
 
       # ============================================================
-      # CHECK STRING REPAIR
+      # VERIFY STRINGS
       # ============================================================
       - name: Check for remaining broken strings
         run: |
@@ -185,21 +189,22 @@ jobs:
           zig fmt --check src
 
       # ============================================================
-      # USE GITHUB RUNNER'S PREINSTALLED ANDROID SDK
+      # ANDROID SDK
       # ============================================================
       - name: Locate Android SDK
         run: |
           echo "===== ANDROID ENVIRONMENT ====="
 
-          echo "ANDROID_HOME=${ANDROID_HOME:-}"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
-
           SDK=""
 
-          if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+          if [ -n "${ANDROID_SDK_ROOT:-}" ] && \
+             [ -d "$ANDROID_SDK_ROOT" ]; then
             SDK="$ANDROID_SDK_ROOT"
-          elif [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then
+
+          elif [ -n "${ANDROID_HOME:-}" ] && \
+               [ -d "$ANDROID_HOME" ]; then
             SDK="$ANDROID_HOME"
+
           elif [ -d "/usr/local/lib/android/sdk" ]; then
             SDK="/usr/local/lib/android/sdk"
           fi
@@ -218,7 +223,7 @@ jobs:
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
 
       # ============================================================
-      # FIND SDKMANAGER
+      # SDKMANAGER
       # ============================================================
       - name: Locate sdkmanager
         run: |
@@ -240,11 +245,6 @@ jobs:
 
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager not found."
-
-            echo
-            echo "SDK contents:"
-            find "$SDK" -maxdepth 4 -type f -name sdkmanager -print 2>/dev/null || true
-
             exit 1
           fi
 
@@ -256,28 +256,23 @@ jobs:
           "$SDKMANAGER" --version
 
       # ============================================================
-      # ACCEPT LICENSES
+      # ANDROID LICENSES
       # ============================================================
       - name: Accept Android licenses
         run: |
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
       # ============================================================
-      # INSTALL ANDROID NDK
+      # NDK
       # ============================================================
       - name: Install Android NDK
         run: |
-          echo "Installing Android NDK 27.2.12479018..."
-
           "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;27.2.12479018"
 
-      # ============================================================
-      # VERIFY NDK
-      # ============================================================
       - name: Configure Android NDK
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
@@ -285,15 +280,6 @@ jobs:
           if [ ! -d "$NDK" ]; then
             echo "ERROR: Android NDK not found:"
             echo "$NDK"
-
-            echo
-            echo "Installed NDKs:"
-            find "$ANDROID_SDK_ROOT/ndk" \
-              -mindepth 1 \
-              -maxdepth 1 \
-              -type d \
-              -print 2>/dev/null || true
-
             exit 1
           fi
 
@@ -302,20 +288,30 @@ jobs:
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
 
           if [ ! -x "$CLANG" ]; then
-            echo "ERROR: AArch64 Android compiler not found:"
+            echo "ERROR: AArch64 compiler not found:"
             echo "$CLANG"
             exit 1
           fi
 
-          echo "===== NDK ====="
-          echo "$NDK"
-
-          echo
           echo "===== AARCH64 CLANG ====="
           "$CLANG" --version
 
       # ============================================================
-      # BUILD LAMBERGAR
+      # INSPECT LAMBERGAR BUILD OPTIONS
+      # ============================================================
+      - name: Inspect Lambergar build options
+        run: |
+          echo "===== ZIG BUILD HELP ====="
+
+          zig build -h || true
+
+          echo
+          echo "===== BUILD.ZIG ====="
+
+          sed -n '1,260p' build.zig
+
+      # ============================================================
+      # BUILD
       # ============================================================
       - name: Build Lambergar Android ARM64
         run: |
@@ -323,18 +319,18 @@ jobs:
           zig version
 
           echo
-          echo "===== ANDROID TARGETS ====="
+          echo "===== BUILD TARGET ====="
+
           zig targets | grep -A5 -B5 android || true
 
           echo
           echo "===== BUILD ====="
 
           zig build \
-            -Dtarget=aarch64-linux-android.24 \
-            -Doptimize=ReleaseFast
+            -Dtarget=aarch64-linux-android.24
 
       # ============================================================
-      # LOCATE OUTPUT
+      # OUTPUT
       # ============================================================
       - name: Locate binary
         run: |
@@ -345,17 +341,22 @@ jobs:
             exit 1
           fi
 
-          find zig-out -type f -exec ls -lh {} \;
+          find zig-out \
+            -type f \
+            -exec ls -lh {} \;
 
       # ============================================================
       # VERIFY ARM64
       # ============================================================
       - name: Verify Android ARM64 binary
         run: |
-          BIN="$(find zig-out/bin -type f -executable | head -n 1)"
+          BIN="$(find zig-out/bin \
+            -type f \
+            -executable \
+            | head -n 1)"
 
           if [ -z "$BIN" ]; then
-            echo "ERROR: No executable found in zig-out/bin."
+            echo "ERROR: No executable found."
             exit 1
           fi
 
@@ -368,6 +369,7 @@ jobs:
 
           echo
           echo "===== ELF HEADER ====="
+
           readelf -h "$BIN" | grep -E \
             "Class:|Data:|Type:|OS/ABI:|Machine:"
 
@@ -382,13 +384,16 @@ jobs:
           fi
 
       # ============================================================
-      # PREPARE ARTIFACT
+      # ARTIFACT
       # ============================================================
-      - name: Prepare release artifact
+      - name: Prepare artifact
         run: |
           mkdir -p release
 
-          BIN="$(find zig-out/bin -type f -executable | head -n 1)"
+          BIN="$(find zig-out/bin \
+            -type f \
+            -executable \
+            | head -n 1)"
 
           if [ -z "$BIN" ]; then
             echo "ERROR: Could not locate executable."
