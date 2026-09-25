@@ -38,7 +38,7 @@ jobs:
             binutils
 
       # ============================================================
-      # INSTALL ZIG
+      # ZIG
       # ============================================================
       - name: Install Zig 0.15.1
         run: |
@@ -138,7 +138,7 @@ jobs:
           PY
 
       # ============================================================
-      # VERIFY STRINGS
+      # CHECK STRINGS
       # ============================================================
       - name: Check for remaining broken strings
         run: |
@@ -189,7 +189,7 @@ jobs:
           zig fmt --check src
 
       # ============================================================
-      # ANDROID SDK
+      # LOCATE ANDROID SDK
       # ============================================================
       - name: Locate Android SDK
         run: |
@@ -263,7 +263,7 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 
       # ============================================================
-      # NDK
+      # INSTALL NDK
       # ============================================================
       - name: Install Android NDK
         run: |
@@ -273,6 +273,9 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;27.2.12479018"
 
+      # ============================================================
+      # CONFIGURE NDK
+      # ============================================================
       - name: Configure Android NDK
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
@@ -285,21 +288,106 @@ jobs:
 
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
-          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+
+          SYSROOT="$TOOLCHAIN/sysroot"
+
+          CLANG="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
 
           if [ ! -x "$CLANG" ]; then
-            echo "ERROR: AArch64 compiler not found:"
+            echo "ERROR: AArch64 Android compiler not found:"
             echo "$CLANG"
             exit 1
           fi
 
+          if [ ! -d "$SYSROOT" ]; then
+            echo "ERROR: Android sysroot not found:"
+            echo "$SYSROOT"
+            exit 1
+          fi
+
+          echo "NDK=$NDK"
+          echo "TOOLCHAIN=$TOOLCHAIN"
+          echo "SYSROOT=$SYSROOT"
+
+          echo "NDK_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+          echo "ANDROID_SYSROOT=$SYSROOT" >> "$GITHUB_ENV"
+
+          echo
           echo "===== AARCH64 CLANG ====="
           "$CLANG" --version
 
       # ============================================================
-      # INSPECT LAMBERGAR BUILD OPTIONS
+      # CREATE ZIG ANDROID LIBC CONFIG
       # ============================================================
-      - name: Inspect Lambergar build options
+      - name: Create Android libc configuration
+        run: |
+          SYSROOT="$ANDROID_SYSROOT"
+
+          CRT_DIR="$SYSROOT/usr/lib/aarch64-linux-android/24"
+
+          ARCH_INCLUDE="$SYSROOT/usr/include/aarch64-linux-android"
+
+          if [ ! -d "$CRT_DIR" ]; then
+            echo "ERROR: Android CRT directory not found:"
+            echo "$CRT_DIR"
+            exit 1
+          fi
+
+          if [ ! -d "$ARCH_INCLUDE" ]; then
+            echo "ERROR: Android architecture include directory not found:"
+            echo "$ARCH_INCLUDE"
+            exit 1
+          fi
+
+          cat > android-libc.conf <<EOF
+          include_dir=$SYSROOT/usr/include
+          sys_include_dir=$ARCH_INCLUDE
+          crt_dir=$CRT_DIR
+          msvc_lib_dir=
+          kernel32_lib_dir=
+          gcc_dir=
+          EOF
+
+          echo "===== ANDROID LIBC CONFIG ====="
+          cat android-libc.conf
+
+      # ============================================================
+      # VERIFY NDK LIBC FILES
+      # ============================================================
+      - name: Verify Android libc
+        run: |
+          SYSROOT="$ANDROID_SYSROOT"
+          CRT_DIR="$SYSROOT/usr/lib/aarch64-linux-android/24"
+
+          echo "===== SYSROOT ====="
+          ls -ld "$SYSROOT"
+
+          echo
+          echo "===== INCLUDE ====="
+          ls -ld "$SYSROOT/usr/include"
+          ls -ld "$SYSROOT/usr/include/aarch64-linux-android"
+
+          echo
+          echo "===== CRT DIRECTORY ====="
+          ls -lh "$CRT_DIR" | head -30
+
+          echo
+          echo "===== LIBC ====="
+
+          if [ -f "$CRT_DIR/libc.so" ]; then
+            echo "OK: libc.so"
+          elif [ -f "$CRT_DIR/libc.a" ]; then
+            echo "OK: libc.a"
+          else
+            echo "ERROR: Android libc not found."
+            exit 1
+          fi
+
+      # ============================================================
+      # INSPECT BUILD OPTIONS
+      # ============================================================
+      - name: Inspect Lambergar build
         run: |
           echo "===== ZIG BUILD HELP ====="
 
@@ -308,7 +396,7 @@ jobs:
           echo
           echo "===== BUILD.ZIG ====="
 
-          sed -n '1,260p' build.zig
+          sed -n '1,280p' build.zig
 
       # ============================================================
       # BUILD
@@ -324,13 +412,14 @@ jobs:
           zig targets | grep -A5 -B5 android || true
 
           echo
-          echo "===== BUILD ====="
+          echo "===== BUILD LAMBERGAR ====="
 
           zig build \
-            -Dtarget=aarch64-linux-android.24
+            -Dtarget=aarch64-linux-android.24 \
+            --libc android-libc.conf
 
       # ============================================================
-      # OUTPUT
+      # LOCATE OUTPUT
       # ============================================================
       - name: Locate binary
         run: |
@@ -353,10 +442,11 @@ jobs:
           BIN="$(find zig-out/bin \
             -type f \
             -executable \
+            | grep -v 'bin_to_binhce' \
             | head -n 1)"
 
           if [ -z "$BIN" ]; then
-            echo "ERROR: No executable found."
+            echo "ERROR: Lambergar executable not found."
             exit 1
           fi
 
@@ -384,7 +474,7 @@ jobs:
           fi
 
       # ============================================================
-      # ARTIFACT
+      # PREPARE ARTIFACT
       # ============================================================
       - name: Prepare artifact
         run: |
@@ -393,10 +483,11 @@ jobs:
           BIN="$(find zig-out/bin \
             -type f \
             -executable \
+            | grep -v 'bin_to_binhce' \
             | head -n 1)"
 
           if [ -z "$BIN" ]; then
-            echo "ERROR: Could not locate executable."
+            echo "ERROR: Could not locate Lambergar executable."
             exit 1
           fi
 
@@ -407,6 +498,7 @@ jobs:
           echo "===== FINAL ARTIFACT ====="
           ls -lh release/lambergar-android-arm64
 
+          echo
           file release/lambergar-android-arm64
 
       # ============================================================
