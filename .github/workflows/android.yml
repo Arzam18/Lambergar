@@ -19,9 +19,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ============================================================
+      # BASIC DEPENDENCIES
+      # ============================================================
       - name: Install dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             curl \
             xz-utils \
@@ -29,6 +33,9 @@ jobs:
             file \
             binutils
 
+      # ============================================================
+      # ZIG
+      # ============================================================
       - name: Install Zig 0.15.1
         run: |
           ZIG_VERSION="0.15.1"
@@ -36,21 +43,26 @@ jobs:
           ZIG_URL="https://ziglang.org/download/${ZIG_VERSION}/${ZIG_ARCHIVE}"
 
           curl -L "$ZIG_URL" -o "$ZIG_ARCHIVE"
+
           tar -xf "$ZIG_ARCHIVE"
 
           ZIG_DIR="$PWD/zig-x86_64-linux-${ZIG_VERSION}"
 
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
+          echo "===== ZIG VERSION ====="
           "$ZIG_DIR/zig" version
 
+      # ============================================================
+      # SOURCE TREE
+      # ============================================================
       - name: Show source tree
         run: |
           echo "===== ZIG SOURCE FILES ====="
           find src -type f -name "*.zig" -print | sort
 
       # ============================================================
-      # REPAIR BROKEN MULTILINE ZIG STRING LITERALS
+      # REPAIR BROKEN ZIG STRING LITERALS
       # ============================================================
       - name: Repair broken Zig string literals
         run: |
@@ -58,7 +70,6 @@ jobs:
           from pathlib import Path
 
           root = Path("src")
-
           files = list(root.rglob("*.zig"))
 
           if not files:
@@ -79,8 +90,7 @@ jobs:
               while i < len(text):
                   ch = text[i]
 
-                  # Zig multiline strings use \\( ... ) syntax.
-                  # Do not touch those.
+                  # Preserve Zig multiline strings.
                   if not in_string and text.startswith('\\\\(', i):
                       j = text.find('\\\\)', i + 3)
 
@@ -123,6 +133,9 @@ jobs:
           print(f"Files repaired: {total}")
           PY
 
+      # ============================================================
+      # CHECK STRING REPAIR
+      # ============================================================
       - name: Check for remaining broken strings
         run: |
           python3 - <<'PY'
@@ -146,8 +159,6 @@ jobs:
                       else:
                           escaped = False
 
-                  # A normal Zig string must not continue onto another
-                  # physical source line.
                   if in_string:
                       errors.append((path, line_no))
 
@@ -162,14 +173,9 @@ jobs:
           print("OK: No broken multiline Zig string literals detected.")
           PY
 
-      - name: Show repaired NNUE debug section
-        run: |
-          echo "===== NNUE DEBUG FUNCTIONS ====="
-
-          grep -n -A120 \
-            "pub fn print_debug_stats" \
-            src/nnue.zig || true
-
+      # ============================================================
+      # FORMAT
+      # ============================================================
       - name: Format Zig source
         run: |
           zig fmt src
@@ -179,31 +185,89 @@ jobs:
           zig fmt --check src
 
       # ============================================================
-      # ANDROID
+      # USE GITHUB RUNNER'S PREINSTALLED ANDROID SDK
       # ============================================================
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
+      - name: Locate Android SDK
         run: |
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          echo "===== ANDROID ENVIRONMENT ====="
 
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" \
-              -name sdkmanager \
-              -type f \
-              | head -n 1)"
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+          SDK=""
+
+          if [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -d "$ANDROID_SDK_ROOT" ]; then
+            SDK="$ANDROID_SDK_ROOT"
+          elif [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then
+            SDK="$ANDROID_HOME"
+          elif [ -d "/usr/local/lib/android/sdk" ]; then
+            SDK="/usr/local/lib/android/sdk"
           fi
 
-          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found."
+          if [ -z "$SDK" ]; then
+            echo "ERROR: Android SDK not found."
             exit 1
           fi
 
-          echo "Using:"
+          echo "Using Android SDK:"
+          echo "$SDK"
+
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+      # ============================================================
+      # FIND SDKMANAGER
+      # ============================================================
+      - name: Locate sdkmanager
+        run: |
+          SDK="$ANDROID_SDK_ROOT"
+
+          SDKMANAGER=""
+
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK/cmdline-tools" \
+              -type f \
+              -name sdkmanager \
+              -perm -111 \
+              2>/dev/null | sort -V | tail -n 1)"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found."
+
+            echo
+            echo "SDK contents:"
+            find "$SDK" -maxdepth 4 -type f -name sdkmanager -print 2>/dev/null || true
+
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+          echo "===== SDKMANAGER ====="
           echo "$SDKMANAGER"
 
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --version
+
+      # ============================================================
+      # ACCEPT LICENSES
+      # ============================================================
+      - name: Accept Android licenses
+        run: |
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+
+      # ============================================================
+      # INSTALL ANDROID NDK
+      # ============================================================
+      - name: Install Android NDK
+        run: |
+          echo "Installing Android NDK 27.2.12479018..."
 
           "$SDKMANAGER" \
             "platform-tools" \
@@ -211,36 +275,47 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;27.2.12479018"
 
+      # ============================================================
+      # VERIFY NDK
+      # ============================================================
       - name: Configure Android NDK
         run: |
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
 
-          if [ ! -d "$NDK" ] && [ -n "$ANDROID_HOME" ]; then
-            NDK="$ANDROID_HOME/ndk/27.2.12479018"
-          fi
-
           if [ ! -d "$NDK" ]; then
-            echo "ERROR: Android NDK 27.2.12479018 not found."
+            echo "ERROR: Android NDK not found:"
+            echo "$NDK"
+
+            echo
+            echo "Installed NDKs:"
+            find "$ANDROID_SDK_ROOT/ndk" \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              -print 2>/dev/null || true
+
             exit 1
           fi
 
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
 
-          echo "===== NDK ====="
-          echo "$NDK"
-
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
 
           if [ ! -x "$CLANG" ]; then
-            echo "ERROR: Android AArch64 compiler not found:"
+            echo "ERROR: AArch64 Android compiler not found:"
             echo "$CLANG"
             exit 1
           fi
 
+          echo "===== NDK ====="
+          echo "$NDK"
+
+          echo
+          echo "===== AARCH64 CLANG ====="
           "$CLANG" --version
 
       # ============================================================
-      # BUILD
+      # BUILD LAMBERGAR
       # ============================================================
       - name: Build Lambergar Android ARM64
         run: |
@@ -252,14 +327,14 @@ jobs:
           zig targets | grep -A5 -B5 android || true
 
           echo
-          echo "===== BUILDING ====="
+          echo "===== BUILD ====="
 
           zig build \
             -Dtarget=aarch64-linux-android.24 \
             -Doptimize=ReleaseFast
 
       # ============================================================
-      # VERIFY
+      # LOCATE OUTPUT
       # ============================================================
       - name: Locate binary
         run: |
@@ -272,6 +347,9 @@ jobs:
 
           find zig-out -type f -exec ls -lh {} \;
 
+      # ============================================================
+      # VERIFY ARM64
+      # ============================================================
       - name: Verify Android ARM64 binary
         run: |
           BIN="$(find zig-out/bin -type f -executable | head -n 1)"
@@ -303,6 +381,9 @@ jobs:
             exit 1
           fi
 
+      # ============================================================
+      # PREPARE ARTIFACT
+      # ============================================================
       - name: Prepare release artifact
         run: |
           mkdir -p release
@@ -315,6 +396,7 @@ jobs:
           fi
 
           cp "$BIN" release/lambergar-android-arm64
+
           chmod +x release/lambergar-android-arm64
 
           echo "===== FINAL ARTIFACT ====="
@@ -322,6 +404,9 @@ jobs:
 
           file release/lambergar-android-arm64
 
+      # ============================================================
+      # UPLOAD
+      # ============================================================
       - name: Upload Android ARM64 NEON binary
         uses: actions/upload-artifact@v4
         with:
